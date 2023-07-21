@@ -387,59 +387,62 @@ func (i *RealFsInfo) GetFsInfoForPath(mountSet map[string]struct{}) ([]Fs, error
 		return nil, err
 	}
 	for device, partition := range i.partitions {
-		_, hasMount := mountSet[partition.mountpoint]
-		_, hasDevice := deviceSet[device]
-		if mountSet == nil || (hasMount && !hasDevice) {
-			var (
-				err error
-				fs  Fs
-			)
-			switch partition.fsType {
-			case DeviceMapper.String():
-				fs.Capacity, fs.Free, fs.Available, err = getDMStats(device, partition.blockSize)
-				klog.V(5).Infof("got devicemapper fs capacity stats: capacity: %v free: %v available: %v:", fs.Capacity, fs.Free, fs.Available)
-				fs.Type = DeviceMapper
-			case ZFS.String():
-				if _, devzfs := os.Stat("/dev/zfs"); os.IsExist(devzfs) {
-					fs.Capacity, fs.Free, fs.Available, err = getZfstats(device)
-					fs.Type = ZFS
-					break
-				}
-				// if /dev/zfs is not present default to VFS
-				fallthrough
-			default:
-				var inodes, inodesFree uint64
-				if utils.FileExists(partition.mountpoint) {
-					fs.Capacity, fs.Free, fs.Available, inodes, inodesFree, err = getVfsStats(partition.mountpoint)
-					fs.Inodes = &inodes
-					fs.InodesFree = &inodesFree
-					fs.Type = VFS
-				} else {
-					klog.V(4).Infof("unable to determine file system type, partition mountpoint does not exist: %v", partition.mountpoint)
-				}
+		if mountSet != nil {
+			_, hasMount := mountSet[partition.mountpoint]
+			_, hasDevice := deviceSet[device]
+			if !hasMount || hasDevice {
+				continue
 			}
-			if err != nil {
-				klog.V(4).Infof("Stat fs failed. Error: %v", err)
+		}
+		var (
+			err error
+			fs  Fs
+		)
+		switch partition.fsType {
+		case DeviceMapper.String():
+			fs.Capacity, fs.Free, fs.Available, err = getDMStats(device, partition.blockSize)
+			klog.V(5).Infof("got devicemapper fs capacity stats: capacity: %v free: %v available: %v:", fs.Capacity, fs.Free, fs.Available)
+			fs.Type = DeviceMapper
+		case ZFS.String():
+			if _, devzfs := os.Stat("/dev/zfs"); os.IsExist(devzfs) {
+				fs.Capacity, fs.Free, fs.Available, err = getZfstats(device)
+				fs.Type = ZFS
+				break
+			}
+			// if /dev/zfs is not present default to VFS
+			fallthrough
+		default:
+			var inodes, inodesFree uint64
+			if utils.FileExists(partition.mountpoint) {
+				fs.Capacity, fs.Free, fs.Available, inodes, inodesFree, err = getVfsStats(partition.mountpoint)
+				fs.Inodes = &inodes
+				fs.InodesFree = &inodesFree
+				fs.Type = VFS
 			} else {
-				deviceSet[device] = struct{}{}
-				fs.DeviceInfo = DeviceInfo{
-					Device: device,
-					Major:  uint(partition.major),
-					Minor:  uint(partition.minor),
-				}
+				klog.V(4).Infof("unable to determine file system type, partition mountpoint does not exist: %v", partition.mountpoint)
+			}
+		}
+		if err != nil {
+			klog.V(4).Infof("Stat fs failed. Error: %v", err)
+		} else {
+			deviceSet[device] = struct{}{}
+			fs.DeviceInfo = DeviceInfo{
+				Device: device,
+				Major:  uint(partition.major),
+				Minor:  uint(partition.minor),
+			}
 
-				if val, ok := diskStatsMap[device]; ok {
-					fs.DiskStats = val
-				} else {
-					for k, v := range diskStatsMap {
-						if v.MajorNum == uint64(partition.major) && v.MinorNum == uint64(partition.minor) {
-							fs.DiskStats = diskStatsMap[k]
-							break
-						}
+			if val, ok := diskStatsMap[device]; ok {
+				fs.DiskStats = val
+			} else {
+				for k, v := range diskStatsMap {
+					if v.MajorNum == uint64(partition.major) && v.MinorNum == uint64(partition.minor) {
+						fs.DiskStats = diskStatsMap[k]
+						break
 					}
 				}
-				filesystems = append(filesystems, fs)
 			}
+			filesystems = append(filesystems, fs)
 		}
 	}
 	return filesystems, nil
